@@ -11,6 +11,7 @@ from io import BytesIO
 from PIL import Image
 import numpy as np
 import torch
+from torchvision import transforms
 from omegaconf import OmegaConf
 from flask import Flask, render_template, jsonify
 from flask_socketio import SocketIO, emit
@@ -31,6 +32,8 @@ parser.add_argument('--host', type=str, default='0.0.0.0')
 parser.add_argument("--checkpoint_path", type=str, default='./checkpoints/self_forcing_dmd.pt')
 parser.add_argument("--config_path", type=str, default='./configs/self_forcing_dmd.yaml')
 parser.add_argument('--trt', action='store_true')
+parser.add_argument('--i2v', action='store_true',
+                    help='Enable image-to-video generation mode')
 args = parser.parse_args()
 
 print(f'Free VRAM {get_cuda_free_memory_gb(gpu)} GB')
@@ -40,6 +43,8 @@ low_memory = get_cuda_free_memory_gb(gpu) < 40
 config = OmegaConf.load(args.config_path)
 default_config = OmegaConf.load("configs/default_config.yaml")
 config = OmegaConf.merge(default_config, config)
+if args.i2v:
+    config.independent_first_frame = True
 
 text_encoder = WanTextEncoder()
 
@@ -227,7 +232,7 @@ def frame_sender_worker():
 
 
 @torch.no_grad()
-def generate_video_stream(prompt, seed, enable_torch_compile=False, enable_fp8=False, use_taehv=False):
+def generate_video_stream(prompt, seed, enable_torch_compile=False, enable_fp8=False, use_taehv=False, init_image=None):
     """Generate video and push frames immediately to frontend."""
     global generation_active, stop_event, frame_send_queue, sender_thread, models_compiled, torch_compile_applied, fp8_applied, current_vae_decoder, current_use_taehv
 
@@ -292,12 +297,38 @@ def generate_video_stream(prompt, seed, enable_torch_compile=False, enable_fp8=F
         emit_progress('Initializing generation...', 12)
 
         rnd = torch.Generator(gpu).manual_seed(seed)
-        # all_latents = torch.zeros([1, 21, 16, 60, 104], device=gpu, dtype=torch.bfloat16)
 
         pipeline._initialize_kv_cache(batch_size=1, dtype=torch.float16, device=gpu)
         pipeline._initialize_crossattn_cache(batch_size=1, dtype=torch.float16, device=gpu)
 
+        if init_image is not None:
+            emit_progress('Encoding input image...', 13)
+            img_transform = transforms.Compose([
+                transforms.Resize((config.height, config.width)),
+                transforms.ToTensor(),
+                transforms.Normalize([0.5], [0.5])
+            ])
+            img_tensor = img_transform(init_image).unsqueeze(0).unsqueeze(2).to(device=gpu, dtype=torch.bfloat16)
+            initial_latent = pipeline.vae.encode_to_latent(img_tensor).to(dtype=torch.float16)
+        else:
+            initial_latent = None
+
         noise = torch.randn([1, 21, 16, 60, 104], device=gpu, dtype=torch.float16, generator=rnd)
+
+        if init_image is not None:
+            emit_progress('Running diffusion...', 15)
+            video = pipeline.inference(
+                noise=noise,
+                text_prompts=[prompt],
+                initial_latent=initial_latent
+            )
+            for frame_idx in range(video.shape[1]):
+                frame_tensor = video[0, frame_idx].cpu()
+                frame_send_queue.put((frame_tensor, frame_idx, 0, job_id))
+            frame_send_queue.join()
+            emit_progress('Generation complete!', 100)
+            generation_active = False
+            return
 
         # Generation parameters
         num_blocks = 7
@@ -519,6 +550,22 @@ def handle_start_generation(data):
     enable_torch_compile = data.get('enable_torch_compile', False)
     enable_fp8 = data.get('enable_fp8', False)
     use_taehv = data.get('use_taehv', False)
+    i2v = data.get('i2v', False)
+    image_data = data.get('image')
+
+    init_image = None
+    if i2v:
+        if not image_data:
+            emit('error', {'message': 'I2V mode requires an image'})
+            return
+        try:
+            if ',' in image_data:
+                image_data = image_data.split(',')[1]
+            image_bytes = base64.b64decode(image_data)
+            init_image = Image.open(BytesIO(image_bytes)).convert('RGB')
+        except Exception as e:
+            emit('error', {'message': f'Failed to decode image: {e}'})
+            return
 
     if not prompt:
         emit('error', {'message': 'Prompt is required'})
@@ -526,7 +573,7 @@ def handle_start_generation(data):
 
     # Start generation in background thread
     socketio.start_background_task(generate_video_stream, prompt, seed,
-                                   enable_torch_compile, enable_fp8, use_taehv)
+                                   enable_torch_compile, enable_fp8, use_taehv, init_image)
     emit('status', {'message': 'Generation started - frames will be sent immediately'})
 
 

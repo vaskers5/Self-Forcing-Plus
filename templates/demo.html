@@ -200,6 +200,10 @@
                                 <button type="button" onclick="setQuickPrompt('quick-demo-2')" style="background-color: #17a2b8; font-size: 11px; padding: 8px; width: 100%; text-align: left; white-space: pre-wrap; line-height: 1.3; min-height: 60px; border-radius: 4px; color: white; border: none; cursor: pointer;">A white and orange tabby cat is seen happily darting through a dense garden, as if chasing something. Its eyes are wide and happy as it jogs forward, scanning the branches, flowers, and leaves as it walks. The path is narrow as it makes its way between all the plants. the scene is captured from a ground-level angle, following the cat closely, giving a low and intimate perspective. The image is cinematic with warm tones and a grainy texture. The scattered daylight between the leaves and plants above creates a warm contrast, accentuating the cat’s orange fur. The shot is clear and sharp, with a shallow depth of field.</button>
                             </div>
                         </div>
+                        <div style="margin-top:10px;">
+                            <label for="i2vImage">Upload Image (I2V):</label>
+                            <input type="file" id="i2vImage" accept="image/*">
+                        </div>
                     </div>
 
                     <div style="display: flex; gap: 20px;">
@@ -237,6 +241,12 @@
                                 <label>
                                     <input type="checkbox" id="taehvToggle">
                                     ⚡ TAEHV VAE
+                                </label>
+                            </div>
+                            <div class="torch-compile-toggle">
+                                <label>
+                                    <input type="checkbox" id="i2vToggle">
+                                    🖼️ I2V Mode
                                 </label>
                             </div>
                         </div>
@@ -304,6 +314,7 @@
         let lastReceiveTime = null;
         let receiveCount = 0;
         let receiveRate = 0;
+        let uploadedImage = null;
 
         // State tracking for one-time toggles
         let torchCompileApplied = false;
@@ -315,6 +326,16 @@
             document.getElementById('fpsValue').textContent = this.value;
             updatePlaybackTiming();
         };
+
+        document.getElementById('i2vImage').addEventListener('change', function() {
+            if (this.files && this.files[0]) {
+                const reader = new FileReader();
+                reader.onload = (e) => { uploadedImage = e.target.result; };
+                reader.readAsDataURL(this.files[0]);
+            } else {
+                uploadedImage = null;
+            }
+        });
 
         // document.getElementById('blocks').oninput = function() {
         //     document.getElementById('blocksValue').textContent = this.value;
@@ -332,6 +353,7 @@
                     const torchToggle = document.getElementById('torchCompile');
                     const fp8Toggle = document.getElementById('fp8Toggle');
                     const taehvToggle = document.getElementById('taehvToggle');
+                    const i2vToggle = document.getElementById('i2vToggle');
 
                     // Disable one-time toggles if already applied
                     if (torchCompileApplied) {
@@ -433,6 +455,7 @@
             const enableTorchCompile = document.getElementById('torchCompile').checked;
             const enableFp8 = document.getElementById('fp8Toggle').checked;
             const useTaehv = document.getElementById('taehvToggle').checked;
+            const useI2V = document.getElementById('i2vToggle').checked;
 
             // Reset state
             frameBuffer = [];
@@ -444,12 +467,20 @@
             enableControls(false);
             startTime = Date.now();
 
+            if (useI2V && !uploadedImage) {
+                alert('Please upload an image for I2V mode');
+                enableControls(true);
+                return;
+            }
+
             socket.emit('start_generation', {
                 prompt: prompt,
                 seed: seed,
                 enable_torch_compile: enableTorchCompile,
                 enable_fp8: enableFp8,
-                use_taehv: useTaehv
+                use_taehv: useTaehv,
+                i2v: useI2V,
+                image: uploadedImage
             });
         }
 
