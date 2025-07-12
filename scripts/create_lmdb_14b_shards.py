@@ -60,6 +60,7 @@ def main():
     seen_prompts = set()  # for deduplication
     neg_prompts = set()
     total_samples = 0
+    data_shape = None
     all_files = []
     all_files += sorted(glob.glob(os.path.join(args.data_path, "*.pt")))
     print(f"get {len(all_files)} .pt files.")
@@ -143,12 +144,16 @@ def main():
 
     print(len(seen_prompts))
 
+    if data_shape is None:
+        print("No valid samples processed.")
+        return
+
     # save each entry's shape to lmdb
     for shard_id, env in enumerate(envs):
         with env.begin(write=True) as txn:
-            for key, val in (data_dict.items()):
+            for key, val in data_dict.items():
                 assert len(data_shape) == 5
-                array_shape = np.array(data_shape)  # val.shape)
+                array_shape = np.array(data_shape)
                 array_shape[0] = counters[shard_id]
                 shape_key = f"{key}_shape".encode()
                 print(shape_key, array_shape)
