@@ -59,11 +59,14 @@ class Trainer:
 
         # Step 2: Initialize the model and optimizer
         if config.distribution_loss == "causvid":
-            self.model = CausVid(config, device=self.device)
+            # Instantiate the model on CPU first to avoid GPU OOM during FSDP
+            # initialisation. The wrapped FSDP module will move parameters to
+            # the correct CUDA device.
+            self.model = CausVid(config, device="cpu")
         elif config.distribution_loss == "dmd":
-            self.model = DMD(config, device=self.device)
+            self.model = DMD(config, device="cpu")
         elif config.distribution_loss == "sid":
-            self.model = SiD(config, device=self.device)
+            self.model = SiD(config, device="cpu")
         else:
             raise ValueError("Invalid distribution matching loss")
 
@@ -114,6 +117,10 @@ class Trainer:
         elif not config.no_visualize or config.load_raw_video:
             self.model.vae = self.model.vae.to(
                 device=self.device, dtype=torch.bfloat16 if config.mixed_precision else torch.float32)
+
+        # Update model attributes to reflect the actual CUDA device after FSDP
+        self.model.device = self.device
+        self.model.scheduler.timesteps = self.model.scheduler.timesteps.to(self.device)
 
         self.generator_optimizer = torch.optim.AdamW(
             [param for param in self.model.generator.parameters()
