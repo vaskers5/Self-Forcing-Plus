@@ -94,5 +94,21 @@ train.py \
 
 Our training run uses 1000 iterations and completes in under 12 hours using 64 H100 GPUs.
 
+## Running on 2×A100
+
+You can train the 14B I2V model on a single node with two A100 GPUs by enabling
+CPU offload for the generator and critic networks. Set `generator_cpu_offload`,
+`real_score_cpu_offload` and `fake_score_cpu_offload` to `true` in the
+configuration file. Training will be slower but fits into GPU memory.
+
+```bash
+torchrun --nnodes=1 --nproc_per_node=2 \
+    train.py \
+    --config_path configs/self_forcing_14b_i2v_dmd.yaml \
+    --logdir logs/self_forcing_14b_i2v_dmd_2gpu \
+    --no_visualize \
+    --disable-wandb
+```
+
 ## Acknowledgements
 This codebase is built on top of the open-source implementation of [CausVid](https://github.com/tianweiy/CausVid), [Self-Forcing](https://github.com/guandeh17/Self-Forcing) and the [Wan2.1](https://github.com/Wan-Video/Wan2.1) repo.
